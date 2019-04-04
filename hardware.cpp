@@ -8,27 +8,99 @@ Hardware::Hardware(QObject *parent) : QObject(parent), elmFound(false) {}
 
 Hardware::~Hardware() {}
 
+// Find current baudrate of adapter
+bool Hardware::findBaudrate() {
+    const qint32 tryBaudrates[]={2000000, 115200, 38400, 9600, 230400, 57600, 19200, 1000000, 500000};
+    // Try different baudrates to find correct one
+    qint32 baud=0;
+    for (auto b : tryBaudrates) {
+        serialPort.setBaudRate(b);
+        qDebug() << "Trying baudrate:" << b;
+        // Send no-meaning command to check for answer
+        QByteArray r = sendCmdSync("\x7F\x7F\r",1000);
+        if (r.endsWith('>')) {
+            baud=b;
+            break;
+        }
+    }
+    if (baud) {
+        qDebug() << "Connected with baudrate: " << baud << "\n";
+        return true;
+    }
+    qDebug() << "Can't find correct baudrate";
+    return false;
+}
+
+// Set maximal baudrate that is supported by adapter
+bool Hardware::setMaxBaudrate() {
+    const qint32 setBaudrates[]={2000000, 1000000, 500000, 230400, 115200};
+    qint32 savedBaudrate = serialPort.baudRate();
+    // Increase baudrate to maximum (try 2 000 000 bps first, then go down to 115 200)
+    QByteArray idString = sendCmd("ATI");
+    qDebug() << "Adapter ID:" << idString;
+
+    QByteArray r = sendCmd("ATBRT20");
+    if (!r.contains("OK")) {
+        qDebug() << "ATBRT command is not supported";
+        return false;
+    }
+
+    for (auto s : setBaudrates) {
+        serialPort.setBaudRate(savedBaudrate);
+
+        qDebug() << "Trying to set baudrate:" << s;
+        QByteArray r = sendCmd(QString("ATBRD%1").arg(qint32(round(qint32(4000000)/s)),2,16,QChar('0')),100);
+        if (!r.contains("OK")) {
+            qDebug() << "Didn't get OK";
+            continue;
+        }
+        else qDebug() << "Got first reply:" << r;
+
+        r.clear();
+        // Now switch serial baudrate to new one and wait for id String
+        serialPort.setBaudRate(s);
+        qDebug() << "Interface baudrate is" << serialPort.baudRate();
+
+        while(serialPort.waitForReadyRead(100)) r.append(serialPort.readAll());
+        qDebug() << "Got second reply:" << r;
+
+        if (r.contains(idString)) {
+            // We got correct reply, so lets confirm this baudrate by sending empty '\r' to scanner
+            sendCmd("");
+            qDebug() << "New (maximum) baudrate is " << serialPort.baudRate();
+            return true;
+        }
+    }
+    return false;
+}
+
+
 // Open serial port
-bool Hardware::open(const QString& port, QSerialPort::BaudRate baudrate) {
+bool Hardware::open(const QString& port) {
     searching = false;
     buffer.clear();
     if (elmFound) serialPort.close();
     qDebug() << "Opening serial port ..." << port;
     serialPort.setPortName(port);
-    serialPort.setBaudRate(baudrate);
     serialPort.setDataBits(QSerialPort::Data8);
     serialPort.setParity(QSerialPort::NoParity);
     serialPort.setStopBits(QSerialPort::OneStop);
     serialPort.setFlowControl(QSerialPort::NoFlowControl);
-
+    serialPort.setBaudRate(115200);
     if (!serialPort.open(QIODevice::ReadWrite)) {
         qDebug() << "Failed to open serial port!";
         return false;
     }
     else qDebug() << "Serial port is opened";
 
-    qDebug() << "Detecting ELM327 ...";
-    elmFound = startupCheck();
+    // Find current baudrate of adapter
+    if (!findBaudrate()) return false;
+
+    // Set maximal baudarate
+    if (!setMaxBaudrate()) return false;
+
+    qDebug() << "Initializing ELM327 ...";
+    elmFound = init();
     if (!elmFound) {
         serialPort.close();
         qDebug() << "Failed to contact ELM327!";
@@ -51,41 +123,38 @@ void Hardware::close() {
 }
 
 // Check that ELM327 is connected
-bool Hardware::startupCheck() {
+bool Hardware::init() {
     if (!serialPort.isOpen()) return false;
 
-    // Reset ELM327
-    QByteArray r = sendCmd("ATZ",1000);
-    qDebug() << ">" << r;
-    if (r.length()==0) return false;
+    QByteArray r;
 
-    // Get module information
-    r = sendCmd("ATI",1000);
-    qDebug() << ">" << r;
-    if (!r.contains("ELM327")) return false;
+    // Soft reset ELM327
+    //r = sendCmd("ATWS",1000);
+    //qDebug() << ">" << r;
+    //if (r.length()==0) return false;
 
-    // Line feeds On
-    r = sendCmd("ATL1");
+    // Line feeds Off
+    r = sendCmd("ATL0",100);
+    qDebug() << ">" << r;
+    if (!r.contains("OK")) return false;
+
+    // Echo off
+    r = sendCmd("ATE0",100);
     qDebug() << ">" << r;
     if (!r.contains("OK")) return false;
 
     // Headers On
-    //r = sendCmd("ATH1");
+    //r = sendCmd("ATH1",100);
     //qDebug() << ">" << r;
     //if (!r.contains("OK")) return false;
 
-    // Echo off
-    r = sendCmd("ATE0");
-    qDebug() << ">" << r;
-    if (!r.contains("OK")) return false;
-
     // Allow long messages (>7 bytes)
-    r = sendCmd("ATAL");
+    r = sendCmd("ATAL",100);
     qDebug() << ">" << r;
     if (!r.contains("OK")) return false;
 
     // Set protocol to Auto
-    r = sendCmd("ATSP0",1000);
+    r = sendCmd("ATSP0",100);
     qDebug() << ">" << r;
     if (!r.contains("OK")) return false;
 
@@ -102,9 +171,12 @@ bool Hardware::sendCmdAsync(const QByteArray &cmd) {
 
 // Send AT command to ELM327
 QByteArray Hardware::sendCmd(const QString& cmd, int timeout) {
+    QByteArray r;
     qDebug() << "Sending command:" << cmd;
-    QByteArray data = cmd.toLatin1().append(0x0D);
-    return sendCmdSync(data, timeout);
+    r = sendCmdSync(cmd.toLatin1().append('\r'), timeout);
+    r.replace("\r","");
+    r=r.replace(">","");
+    return r;
 }
 
 QByteArray Hardware::sendCmdSync(const QByteArray &cmd, int timeout) {
@@ -115,11 +187,7 @@ QByteArray Hardware::sendCmdSync(const QByteArray &cmd, int timeout) {
         serialPort.flush();
         while(serialPort.waitForReadyRead(timeout))
             r.append(serialPort.readAll());
-
         serialPort.blockSignals(false);
-        if (!r.isEmpty()) {
-            if (r.at(r.size()-1) == 0x0D) r.remove(r.size()-1, 1);
-        }
     }
     return r;
 }

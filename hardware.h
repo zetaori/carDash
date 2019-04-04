@@ -15,13 +15,15 @@ public:
     ~Hardware();
 
     bool sendCmdAsync(const QByteArray& cmd);
-    QByteArray sendCmdSync(const QByteArray& cmd, int timeout=500);
+    QByteArray sendCmdSync(const QByteArray& cmd, int timeout=200);
 
 private slots:
     void readData();
 
 private:
-    bool startupCheck();
+    bool init();
+    bool findBaudrate();
+    bool setMaxBaudrate();
 
 private:
     QSerialPort serialPort;
@@ -30,9 +32,9 @@ private:
 
 public:
     bool searching;
-    bool open(const QString& port, QSerialPort::BaudRate baudrate = QSerialPort::Baud115200);
+    bool open(const QString& port);
     void close();
-    QByteArray sendCmd(const QString& cmd, int timeout=500);
+    QByteArray sendCmd(const QString& cmd, int timeout=200);
     void processPacket(const QString& str);
 
     int speed() const { return m_speed; }
