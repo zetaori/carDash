@@ -9,6 +9,7 @@
 #include <QDebug>
 
 #include "hardware.h"
+#include <xmlparser.h>
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
@@ -19,8 +20,15 @@ int main(int argc, char *argv[]) {
     QSettings sett("ChalkElec","CarDash");
     QList<QSerialPortInfo> portList = QSerialPortInfo::availablePorts();
 
+    xmlParser x;
+    x.process(app.arguments().at(1));
+    x.printAll();
+    return 0;
+
+
+
     // Find correct serial port of OBD2 scanner
-    if (app.arguments().count()>1) {
+    if (app.arguments().count() > 1) {
         port=app.arguments().at(1);
         qDebug() << "Using command-line port" << port;
     }

@@ -37,11 +37,11 @@ Item {
     property int outsideTemperature: +27
     property string temperatureUnit: "C"
 
-    NumberAnimation on rpm {
-        duration: 500
+    Behavior on rpm {
+        NumberAnimation { duration: 200 }
     }
 
-    NumberAnimation on speed {
-        duration: 500
+    Behavior on speed {
+        NumberAnimation { duration: 300 }
     }
 }

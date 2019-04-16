@@ -43,6 +43,7 @@ public:
     int coolantTemp() const { return m_coolantTemp; }
     int fuelLevel() const { return m_fuelLevel; }
 
+    void setSmoothingEnabled(bool value);
 signals:
     void speedChanged();
     void rpmChanged();
@@ -51,6 +52,11 @@ signals:
     void fuelLevelChanged();
 
 private:
+    void setSpeed(int value);
+    void setRpm(qreal value);
+
+private:
+	bool m_smoothingEnabled;
     int m_speed = 0;
     qreal m_rpm = 0;
     int m_airTemp = 0;

@@ -4,7 +4,16 @@
 #include <QTimer>
 #include <QDebug>
 
-Hardware::Hardware(QObject *parent) : QObject(parent), elmFound(false) {}
+float ema(int newValue) {
+    static constexpr float alpha = 0.7;
+    static float lastEma = 0;
+    lastEma = (alpha * newValue) + (1.0 - alpha) * lastEma;
+    return lastEma;
+}
+
+Hardware::Hardware(QObject *parent) : QObject(parent), 
+		  elmFound(false),
+		  m_smoothingEnabled(true) {}
 
 Hardware::~Hardware() {}
 
@@ -229,17 +238,14 @@ void Hardware::processPacket(const QString &str) {
         value = QString(str.mid(4, 2)).toInt(&ok, 16);
         Q_ASSERT(ok);
         //qDebug() << "Speed value received:" << value;
-        m_speed = value;
-
-        emit speedChanged();
+        setSpeed(value);
     }
     else if (pid == "0C")  { // RPM
         bool ok = false;
         value = QString(str.mid(4, 4)).toInt(&ok, 16);
         Q_ASSERT(ok);
         qDebug() << "RPM value received:" << value;
-        m_rpm = value / 1000.0 / 4;
-        emit rpmChanged();
+        setRpm(value / 1000.0 / 4);
     }
     else if (pid == "46")  { // air temperature in C
         bool ok = false;
@@ -268,3 +274,26 @@ void Hardware::processPacket(const QString &str) {
     else
         return;
 }
+
+void Hardware::setSpeed(int value) {
+    if (m_smoothingEnabled) {
+        m_speed = ema(value);
+        emit speedChanged();
+    }
+    else {
+        if (m_speed == value) return;
+        m_speed = value;
+        emit speedChanged();
+    }
+}
+
+void Hardware::setRpm(qreal value) {
+    if (m_rpm == value) return;
+    m_rpm = value;
+    emit rpmChanged();
+}
+
+void Hardware::setSmoothingEnabled(bool value) {
+    m_smoothingEnabled = value;
+}
+
