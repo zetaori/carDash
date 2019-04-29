@@ -44,4 +44,17 @@ Item {
     Behavior on speed {
         NumberAnimation { duration: 300 }
     }
+
+    Connections {
+        target: HardwareClass
+        onDataReceived: { // (targetId, value)
+            console.log("targetId:", targetId, "value:", value)
+
+            switch (targetId) {
+                case "81": speed = value; break;
+                case "37": rpm = value; break;
+                default: break;
+            }
+        }
+    }
 }

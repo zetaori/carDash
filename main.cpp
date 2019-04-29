@@ -7,29 +7,29 @@
 #include <QSerialPortInfo>
 #include <QSettings>
 #include <QDebug>
+#include <QThread>
 
 #include "hardware.h"
 #include <xmlparser.h>
 
 int main(int argc, char *argv[]) {
+
+    if (argc < 2) {
+        qWarning() << "Usage: program <xml_commands_file.xml> <serial_port_optional>";
+        return EXIT_FAILURE;
+    }
+
     QGuiApplication app(argc, argv);
     app.setOverrideCursor(QCursor(Qt::BlankCursor));
 
-    Hardware hw;
+    Hardware hw(argv[1]);
     QString port;
     QSettings sett("ChalkElec","CarDash");
     QList<QSerialPortInfo> portList = QSerialPortInfo::availablePorts();
 
-    xmlParser x;
-    x.process(app.arguments().at(1));
-    x.printAll();
-    return 0;
-
-
-
     // Find correct serial port of OBD2 scanner
-    if (app.arguments().count() > 1) {
-        port=app.arguments().at(1);
+    if (app.arguments().count() > 2) {
+        port=app.arguments().at(2);
         qDebug() << "Using command-line port" << port;
     }
     else if (!sett.value("port").toString().isEmpty()) {
@@ -56,15 +56,36 @@ int main(int argc, char *argv[]) {
     if (!hw.open(port)) qFatal("Can't open serial port of OBD2 scanner!");
     else sett.setValue("port",port);
 
+    // hw.sendCmd("010C", 5000); // rpm
+
+    qDebug() << "Sleeping 5 secs after initialization...";
+
+    QThread::sleep(5);
+
     QTimer timer;
     QObject::connect(&timer, &QTimer::timeout, [&] {
-                //h.sendCmdAsync("010D"); // speed
+#if 0 // Sending comands from config - uncomment when needed
+                auto& cmdList = hw.parser().commands();
+                for (auto c : cmdList) {
+                    // If skipCount is 0 (by default) we will process the command each time
+                    if (++(c->curCount) >= c->skipCount) {
+                        c->curCount = 0;
+
+                        qDebug() << "Sending command:" << c->send;
+                        hw.sendCmdAsync(c->send);
+                    }
+                    // else
+                    //     qDebug() << "Skipping count for" << c->name;
+                }
+#endif // Sensing commands from config
+
+                // hw.sendCmdAsync("010D"); // speed
                 hw.sendCmdAsync("010C"); // rpm
-                //h.sendCmdAsync("0146"); // air temp
-                //h.sendCmdAsync("0105"); // coolant temp
+                //hw.sendCmdAsync("0146"); // air temp
+                //hw.sendCmdAsync("0105"); // coolant temp
             });
 
-    timer.start(100);
+    timer.start(200); // 30 FPS
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("HardwareClass", &hw);

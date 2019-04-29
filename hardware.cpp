@@ -3,6 +3,8 @@
 #include <QTime>
 #include <QTimer>
 #include <QDebug>
+#include <QJSEngine>
+#include <QJSValue>
 
 float ema(int newValue) {
     static constexpr float alpha = 0.7;
@@ -11,17 +13,31 @@ float ema(int newValue) {
     return lastEma;
 }
 
-Hardware::Hardware(QObject *parent) : QObject(parent), 
-		  elmFound(false),
-		  m_smoothingEnabled(true) {}
+Hardware::Hardware(const QString& xmlConfig, QObject *parent) : QObject(parent),
+    elmFound(false),
+    m_smoothingEnabled(true),
+    m_currBaudrate(0)
+{
+    m_xmlParser.process(xmlConfig);
+    m_xmlParser.printAll();
+
+    // QTimer::singleShot(2000, [=] { processPacket("410D40"); });
+    // QTimer::singleShot(3000, [=] { processPacket("410D50"); });
+    // QTimer::singleShot(4000, [=] { processPacket("410D60"); });
+    // QTimer::singleShot(6000, [=] { processPacket("410D80"); });
+
+    // QTimer* timer = new QTimer(this);
+    // connect(timer, &QTimer::timeout, [=] { processPacket("410D" + QString::number(int(qrand() % 100)).toLatin1()); });
+    // timer->start(33);
+}
 
 Hardware::~Hardware() {}
 
 // Find current baudrate of adapter
 bool Hardware::findBaudrate() {
-    const qint32 tryBaudrates[]={2000000, 115200, 38400, 9600, 230400, 57600, 19200, 1000000, 500000};
+    const quint32 tryBaudrates[]={2000000, 115200, 38400, 9600, 230400, 57600, 19200, 1000000, 500000};
     // Try different baudrates to find correct one
-    qint32 baud=0;
+    quint32 baud=0;
     for (auto b : tryBaudrates) {
         serialPort.setBaudRate(b);
         qDebug() << "Trying baudrate:" << b;
@@ -34,6 +50,7 @@ bool Hardware::findBaudrate() {
     }
     if (baud) {
         qDebug() << "Connected with baudrate: " << baud << "\n";
+        m_currBaudrate = baud;
         return true;
     }
     qDebug() << "Can't find correct baudrate";
@@ -42,11 +59,17 @@ bool Hardware::findBaudrate() {
 
 // Set maximal baudrate that is supported by adapter
 bool Hardware::setMaxBaudrate() {
-    const qint32 setBaudrates[]={2000000, 1000000, 500000, 230400, 115200};
+    const quint32 setBaudrates[]={2000000, 1000000, 500000, 230400, 115200};
+
+    if (m_currBaudrate == setBaudrates[0])
+        return true;
+
     qint32 savedBaudrate = serialPort.baudRate();
     // Increase baudrate to maximum (try 2 000 000 bps first, then go down to 115 200)
     QByteArray idString = sendCmd("ATI");
     qDebug() << "Adapter ID:" << idString;
+    if (idString.startsWith("ATI"))
+        idString = idString.mid(3);
 
     QByteArray r = sendCmd("ATBRT20");
     if (!r.contains("OK")) {
@@ -58,7 +81,7 @@ bool Hardware::setMaxBaudrate() {
         serialPort.setBaudRate(savedBaudrate);
 
         qDebug() << "Trying to set baudrate:" << s;
-        QByteArray r = sendCmd(QString("ATBRD%1").arg(qint32(round(qint32(4000000)/s)),2,16,QChar('0')),100);
+        QByteArray r = sendCmd(QString("ATBRD%1").arg(qRound(4000000.0/s),2,16,QChar('0')),100);
         if (!r.contains("OK")) {
             qDebug() << "Didn't get OK";
             continue;
@@ -95,7 +118,8 @@ bool Hardware::open(const QString& port) {
     serialPort.setParity(QSerialPort::NoParity);
     serialPort.setStopBits(QSerialPort::OneStop);
     serialPort.setFlowControl(QSerialPort::NoFlowControl);
-    serialPort.setBaudRate(115200);
+    // serialPort.setBaudRate(115200);
+    // serialPort.setBaudRate(2000000);
     if (!serialPort.open(QIODevice::ReadWrite)) {
         qDebug() << "Failed to open serial port!";
         return false;
@@ -210,15 +234,15 @@ void Hardware::readData() {
     while(buffer.contains(0x0D)) {
         int i=buffer.indexOf(0x0D);
         QByteArray d = buffer.left(i);
-        QString str = d.replace("\r", "").replace("\n", "").replace(" ", "").replace(">", "").trimmed();
+        QByteArray str = d.replace("\r", "").replace("\n", "").replace(" ", "").replace(">", "").trimmed();
         if (str.length()) processPacket(str);
         buffer=buffer.mid(i+1);
     }
 }
 
-void Hardware::processPacket(const QString &str) {
+void Hardware::processPacket(const QByteArray& str) {
 
-    //qDebug() << "Raw data recieved:" << str;
+    qDebug() << "Raw data received:" << str;
 
     if (str.contains("SEARCHING")) {
         searching = true;
@@ -229,50 +253,101 @@ void Hardware::processPacket(const QString &str) {
 
     if (!str.startsWith("41") || str.length() < 6) return;
 
-    int value = 0;
-    QString pid = str.mid(2, 2);
-    //qDebug() << "Pid:" << pid;
+    QByteArray pid = str.mid(2, 2).toLower();
+    qDebug() << "Pid:" << pid;
 
-    if (pid == "0D")  { // Speed
-        bool ok = false;
-        value = QString(str.mid(4, 2)).toInt(&ok, 16);
-        Q_ASSERT(ok);
-        //qDebug() << "Speed value received:" << value;
-        setSpeed(value);
+    auto& cmdList = m_xmlParser.commands();
+    for (auto& c : cmdList) {
+
+        if (pid == c->send) {
+            QByteArray val = str.mid(4, c->replyLength * 2); // * 2 because 1 byte takes 2 characters
+
+            if (!(c->conversion.isEmpty())) {
+                // Conversion example: (B0*256+B1)/32768*14.7
+                QStringList possibleParams { "B0", "B1", "B2", "B3", "V" };
+                QMap<QString, int> convArgs;
+
+                for (auto p : possibleParams) {
+                    if (c->conversion.contains(p)) {
+                        bool ok = false;
+                        int byteNumber = p.right(1).toInt(&ok);
+
+                        // In case of XML config error or V, index will be out of range, we take
+                        // values as is.
+                        if (!ok || byteNumber < 0 || byteNumber >= val.length())
+                            convArgs.insert(p, val.toInt(NULL, 16));
+                        else // B0-B3
+                            convArgs.insert(p, val.mid(byteNumber * 2, 2).toInt(NULL, 16));
+                    }
+                }
+
+                QString functionTemplate = "(function(%1) { return %2; })";
+                QString funcStr = functionTemplate.arg(convArgs.keys().join(",")).arg(c->conversion);
+
+                qDebug() << "funcStr:" << funcStr << ", args:" << convArgs.values();
+
+                QJSEngine engine;
+                QJSValue jsFunc = engine.evaluate(funcStr);
+                QJSValueList args;
+                for (auto v : convArgs.values())
+                    args << v;
+
+                QJSValue finalValue = jsFunc.call(args);
+
+                qDebug() << "Calculated result:" << finalValue.toVariant();
+
+                emit dataReceived(c->name, finalValue);
+            }
+            else {
+                qDebug() << "Conversion is empty for:" << pid;
+                emit dataReceived(c->name, val.toInt(NULL, 16));
+            }
+            break;
+        }
+        // else
+        //     qDebug() << "Cmd send:" << c->send << "not equal to:" << pid;
     }
-    else if (pid == "0C")  { // RPM
-        bool ok = false;
-        value = QString(str.mid(4, 4)).toInt(&ok, 16);
-        Q_ASSERT(ok);
-        qDebug() << "RPM value received:" << value;
-        setRpm(value / 1000.0 / 4);
-    }
-    else if (pid == "46")  { // air temperature in C
-        bool ok = false;
-        value = QString(str.mid(4, 4)).toInt(&ok, 16);
-        Q_ASSERT(ok);
-        qDebug() << "Air temp value received:" << value;
-        m_airTemp = value - 40;
-        emit airTempChanged();
-    }
-    else if (pid == "05")  { // coolant temperature in C
-        bool ok = false;
-        value = QString(str.mid(4, 4)).toInt(&ok, 16);
-        Q_ASSERT(ok);
-        qDebug() << "Coolant temp value received:" << value;
-        m_coolantTemp = value - 40;
-        emit coolantTempChanged();
-    }
-    else if (pid == "2F")  { // fuel level in %
-        bool ok = false;
-        value = QString(str.mid(4, 4)).toInt(&ok, 16);
-        Q_ASSERT(ok);
-        qDebug() << "Fuel level received:" << value;
-        m_fuelLevel = 100*value / 255;
-        emit fuelLevelChanged();
-    }
-    else
-        return;
+
+    // if (pid == "0D")  { // Speed
+    //     bool ok = false;
+    //     value = QString(str.mid(4, 2)).toInt(&ok, 16);
+    //     Q_ASSERT(ok);
+    //     //qDebug() << "Speed value received:" << value;
+    //     setSpeed(value);
+    // }
+    // else if (pid == "0C")  { // RPM
+    //     bool ok = false;
+    //     value = QString(str.mid(4, 4)).toInt(&ok, 16);
+    //     Q_ASSERT(ok);
+    //     qDebug() << "RPM value received:" << value;
+    //     setRpm(value / 1000.0 / 4);
+    // }
+    // else if (pid == "46")  { // air temperature in C
+    //     bool ok = false;
+    //     value = QString(str.mid(4, 4)).toInt(&ok, 16);
+    //     Q_ASSERT(ok);
+    //     qDebug() << "Air temp value received:" << value;
+    //     m_airTemp = value - 40;
+    //     emit airTempChanged();
+    // }
+    // else if (pid == "05")  { // coolant temperature in C
+    //     bool ok = false;
+    //     value = QString(str.mid(4, 4)).toInt(&ok, 16);
+    //     Q_ASSERT(ok);
+    //     qDebug() << "Coolant temp value received:" << value;
+    //     m_coolantTemp = value - 40;
+    //     emit coolantTempChanged();
+    // }
+    // else if (pid == "2F")  { // fuel level in %
+    //     bool ok = false;
+    //     value = QString(str.mid(4, 4)).toInt(&ok, 16);
+    //     Q_ASSERT(ok);
+    //     qDebug() << "Fuel level received:" << value;
+    //     m_fuelLevel = 100*value / 255;
+    //     emit fuelLevelChanged();
+    // }
+    // else
+    //     return;
 }
 
 void Hardware::setSpeed(int value) {
@@ -297,3 +372,7 @@ void Hardware::setSmoothingEnabled(bool value) {
     m_smoothingEnabled = value;
 }
 
+const XmlParser& Hardware::parser() const
+{
+    return m_xmlParser;
+}

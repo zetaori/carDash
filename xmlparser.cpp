@@ -4,20 +4,21 @@
 #include "QXmlStreamReader"
 
 
-xmlParser::xmlParser() {
+XmlParser::XmlParser() {
     init.clear();
-    cmd.clear();
+    qDeleteAll(m_commands);
+    m_commands.clear();
 }
 
-void xmlParser::printAll() {
+void XmlParser::printAll() {
     qDebug() << "Init section:";
     for (auto i : init) qDebug() << i;
     qDebug() << "Rotation section:";
-    for (auto c : cmd) qDebug() << c.name << c.send << c.replyLength << c.skipCount << c.curCount << c.conversion << c.units;
+    for (auto c : m_commands) qDebug() << c->name << c->send << c->replyLength << c->skipCount << c->curCount << c->conversion << c->units;
 }
 
 // Parse init section of XML file
-void xmlParser::parseInit() {
+void XmlParser::parseInit() {
     while (xml.readNextStartElement()) {
         if (xml.name() == "command") {
             for (auto attr : xml.attributes()) {
@@ -30,22 +31,23 @@ void xmlParser::parseInit() {
 }
 
 // Parse rotation section of XML file
-void xmlParser::parseRotation() {
+void XmlParser::parseRotation() {
     while (xml.readNextStartElement()) {
         if (xml.name() == "command") {
-            commands c;
-            c.skipCount=0;
-            c.curCount=0;
-            c.replyLength=0;
+            Command* c = new Command();
+            c->skipCount=0;
+            c->curCount=0;
+            c->replyLength=0;
             for (auto attr : xml.attributes()) {
-                if (attr.name().toString() == "name") c.name=attr.value().toString();
-                else if (attr.name().toString() == "send") c.send=attr.value().toString();
-                else if (attr.name().toString() == "conversion") c.conversion=attr.value().toString();
-                else if (attr.name().toString() == "units") c.units=attr.value().toString();
-                else if (attr.name().toString() == "replyLength") c.replyLength=attr.value().toInt();
-                else if (attr.name().toString() == "skipCount") c.skipCount=attr.value().toInt();
+                if (attr.name().toString() == "name") c->name=attr.value().toString();
+                else if (attr.name().toString() == "targetId") c->name=attr.value().toString();
+                else if (attr.name().toString() == "send") c->send=attr.value().toLatin1();
+                else if (attr.name().toString() == "conversion") c->conversion=attr.value().toString();
+                else if (attr.name().toString() == "units") c->units=attr.value().toString();
+                else if (attr.name().toString() == "replyLength") c->replyLength=attr.value().toInt();
+                else if (attr.name().toString() == "skipCount") c->skipCount=attr.value().toInt();
             }
-            cmd.append(c);
+            m_commands.append(c);
             xml.readNext();
         }
         else break;
@@ -53,10 +55,11 @@ void xmlParser::parseRotation() {
 }
 
 
-// Parse XML file, and place result in 2 lists: init and cmd
-bool xmlParser::process(QString fileName) {
+// Parse XML file, and place result in 2 lists: init and m_commands
+bool XmlParser::process(QString fileName) {
     init.clear();
-    cmd.clear();
+    qDeleteAll(m_commands);
+    m_commands.clear();
 
     QFile* file = new QFile(fileName);
     if (!file->open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -85,4 +88,9 @@ bool xmlParser::process(QString fileName) {
         return false;
     }
     return true;
+}
+
+const QList<Command*>& XmlParser::commands() const
+{
+    return m_commands;
 }
