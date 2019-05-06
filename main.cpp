@@ -20,10 +20,10 @@ int main(int argc, char *argv[]) {
     QSettings sett("ChalkElec","CarDash");
     QList<QSerialPortInfo> portList = QSerialPortInfo::availablePorts();
 
-    xmlParser x;
-    x.process(app.arguments().at(1));
-    x.printAll();
-    return 0;
+ //   xmlParser x;
+ //   x.process(app.arguments().at(1));
+ //   x.printAll();
+ //   return 0;
 
 
 
@@ -58,13 +58,13 @@ int main(int argc, char *argv[]) {
 
     QTimer timer;
     QObject::connect(&timer, &QTimer::timeout, [&] {
-                //h.sendCmdAsync("010D"); // speed
+                //hw.sendCmdAsync("010D"); // speed
                 hw.sendCmdAsync("010C"); // rpm
-                //h.sendCmdAsync("0146"); // air temp
-                //h.sendCmdAsync("0105"); // coolant temp
+                //hw.sendCmdAsync("0146"); // air temp
+                //hw.sendCmdAsync("0105"); // coolant temp
             });
 
-    timer.start(100);
+    timer.start(6);
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("HardwareClass", &hw);

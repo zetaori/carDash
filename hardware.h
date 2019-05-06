@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QSerialPort>
+#include <QJSEngine>
 
 class Hardware : public QObject {
     Q_OBJECT
@@ -24,8 +25,10 @@ private:
     bool init();
     bool findBaudrate();
     bool setMaxBaudrate();
+    int evaluate(QByteArray arg, QString expression);
 
 private:
+    QJSEngine engine;
     QSerialPort serialPort;
     bool elmFound;
     QByteArray buffer;

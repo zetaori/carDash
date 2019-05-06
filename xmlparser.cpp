@@ -12,8 +12,8 @@ xmlParser::xmlParser() {
 void xmlParser::printAll() {
     qDebug() << "Init section:";
     for (auto i : init) qDebug() << i;
-    qDebug() << "Rotation section:";
-    for (auto c : cmd) qDebug() << c.name << c.send << c.replyLength << c.skipCount << c.curCount << c.conversion << c.units;
+    qDebug() << "Commands section:";
+    for (auto c : cmd) qDebug() << c.name << c.send << c.replyLength << c.skipCount << c.conversion << c.units;
 }
 
 // Parse init section of XML file
@@ -29,7 +29,7 @@ void xmlParser::parseInit() {
     }
 }
 
-// Parse rotation section of XML file
+// Parse commands section of XML file
 void xmlParser::parseRotation() {
     while (xml.readNextStartElement()) {
         if (xml.name() == "command") {
@@ -68,7 +68,7 @@ bool xmlParser::process(QString fileName) {
     xml.setDevice(file);
 
     if (xml.readNextStartElement()) {
-        if (xml.name() == "OBD2") {
+        if (xml.name() == "obd2") {
             while (xml.readNextStartElement()) {
                 if (xml.name() == "init") parseInit();
                 else if (xml.name() == "rotation") parseRotation();

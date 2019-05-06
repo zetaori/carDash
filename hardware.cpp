@@ -3,6 +3,7 @@
 #include <QTime>
 #include <QTimer>
 #include <QDebug>
+#include <QJSEngine>
 
 float ema(int newValue) {
     static constexpr float alpha = 0.7;
@@ -13,9 +14,18 @@ float ema(int newValue) {
 
 Hardware::Hardware(QObject *parent) : QObject(parent), 
 		  elmFound(false),
-		  m_smoothingEnabled(true) {}
+          m_smoothingEnabled(false) {}
 
 Hardware::~Hardware() {}
+
+int Hardware::evaluate(QByteArray arg, QString expression) {
+    for (int i=arg.size(); i<4; i++) arg.append(char(0));
+    QString eval=QString("(function(v, b1, b2, b3, b4) { return ") + expression + QString("; })");
+    QJSValue func = engine.evaluate(eval);
+    QJSValueList args;
+    args << 1 << arg.at(0) << arg.at(1) << arg.at(2) << arg.at(3);
+    return func.call(args).toInt();
+}
 
 // Find current baudrate of adapter
 bool Hardware::findBaudrate() {
@@ -46,6 +56,7 @@ bool Hardware::setMaxBaudrate() {
     qint32 savedBaudrate = serialPort.baudRate();
     // Increase baudrate to maximum (try 2 000 000 bps first, then go down to 115 200)
     QByteArray idString = sendCmd("ATI");
+    if (idString.startsWith("ATI")) idString=idString.remove(0,3);
     qDebug() << "Adapter ID:" << idString;
 
     QByteArray r = sendCmd("ATBRT20");
@@ -174,7 +185,7 @@ bool Hardware::sendCmdAsync(const QByteArray &cmd) {
     if (!elmFound) return false;
     if (searching) return false;
     QByteArray data = cmd;
-    serialPort.write(data.append(0x0D));
+    serialPort.write(data.append('\r'));
     return true;
 }
 
@@ -244,14 +255,14 @@ void Hardware::processPacket(const QString &str) {
         bool ok = false;
         value = QString(str.mid(4, 4)).toInt(&ok, 16);
         Q_ASSERT(ok);
-        qDebug() << "RPM value received:" << value;
+        //qDebug() << "RPM value received:" << value;
         setRpm(value / 1000.0 / 4);
     }
     else if (pid == "46")  { // air temperature in C
         bool ok = false;
         value = QString(str.mid(4, 4)).toInt(&ok, 16);
         Q_ASSERT(ok);
-        qDebug() << "Air temp value received:" << value;
+        //qDebug() << "Air temp value received:" << value;
         m_airTemp = value - 40;
         emit airTempChanged();
     }
@@ -259,7 +270,7 @@ void Hardware::processPacket(const QString &str) {
         bool ok = false;
         value = QString(str.mid(4, 4)).toInt(&ok, 16);
         Q_ASSERT(ok);
-        qDebug() << "Coolant temp value received:" << value;
+        //qDebug() << "Coolant temp value received:" << value;
         m_coolantTemp = value - 40;
         emit coolantTempChanged();
     }
@@ -267,7 +278,7 @@ void Hardware::processPacket(const QString &str) {
         bool ok = false;
         value = QString(str.mid(4, 4)).toInt(&ok, 16);
         Q_ASSERT(ok);
-        qDebug() << "Fuel level received:" << value;
+        //qDebug() << "Fuel level received:" << value;
         m_fuelLevel = 100*value / 255;
         emit fuelLevelChanged();
     }

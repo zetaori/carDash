@@ -20,14 +20,14 @@ Item {
     property bool sideLightsOn: false
 
     property real speed: HardwareClass.speed
-    onSpeedChanged:console.log("speed:", speed)
+    //onSpeedChanged:console.log("speed:", speed)
     property real maxSpeed: 240
     property real fuelValue: 0.90
     property real maxFuelValue: 1.0
     property real minFuelValue: 0.0
 
     property real rpm: HardwareClass.rpm
-    onRpmChanged:console.log("rpm:", rpm)
+    //onRpmChanged:console.log("rpm:", rpm)
     property real maxRpm: 8
     property string gear: "D"
     property real oilTempValue: 0.36
