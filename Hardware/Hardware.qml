@@ -19,20 +19,20 @@ Item {
     property bool rightTurnLightsOn: false
     property bool sideLightsOn: false
 
-    property real speed: HardwareClass.speed
-    onSpeedChanged:console.log("speed:", speed)
+    property real speed: 0
+    // onSpeedChanged:console.log("speed:", speed)
     property real maxSpeed: 240
-    property real fuelValue: 0.90
-    property real maxFuelValue: 1.0
-    property real minFuelValue: 0.0
+    property real fuelValue: 90
+    property real maxFuelValue: 100
+    property real minFuelValue: 0
 
-    property real rpm: HardwareClass.rpm
-    onRpmChanged:console.log("rpm:", rpm)
-    property real maxRpm: 8
+    property real rpm: 0
+    // onRpmChanged:console.log("rpm:", rpm)
+    property real maxRpm: 8000
     property string gear: "D"
-    property real oilTempValue: 0.36
-    property real maxOilTempValue: 1.0
-    property real minOilTempValue: 0.0
+    property real coolantTempValue: 0
+    property real maxCoolantTempValue: 100
+    property real minCoolantTempValue: 0
 
     property int outsideTemperature: +27
     property string temperatureUnit: "C"
@@ -53,6 +53,10 @@ Item {
             switch (targetId) {
                 case "81": speed = value; break;
                 case "37": rpm = value; break;
+                case "170": fuelValue = value; break;
+                case "14": coolantTempValue = value; break;
+                case "173": outsideTemperature = value; break;
+                case "139": gear = value; break;
                 default: break;
             }
         }

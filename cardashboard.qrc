@@ -34,5 +34,6 @@
         <file>resources/fuel_empty_red.png</file>
         <file>resources/fuel_full_green.png</file>
         <file>resources/fuel_full_red.png</file>
+        <file>resources/proton-animated.gif</file>
     </qresource>
 </RCC>

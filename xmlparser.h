@@ -21,6 +21,7 @@ public:
     bool process(QString fileName);
     void printAll();
 
+    const QList<QString>& initCommands() const;
     const QList<Command*>& commands() const;
 
 private:

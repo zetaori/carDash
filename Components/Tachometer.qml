@@ -12,8 +12,8 @@ Item {
         anchors.fill: parent
         source: "../resources/dashboard_bg.png"
         scaleSource: "../resources/rpm_scale.png"
-        value: Hardware.rpm
-        maxValue: Hardware.maxRpm
+        value: Hardware.rpm / 1000.0
+        maxValue: Hardware.maxRpm / 1000.0
 
         Column {
             anchors.centerIn: parent
@@ -41,7 +41,7 @@ Item {
             }
         }
 
-        // OilTemp bars
+        // Coolant temperature bars
         Row {
             anchors.bottom: parent.bottom
             anchors.bottomMargin: parent.height / 30
@@ -52,7 +52,7 @@ Item {
 
                 model: 12
 
-                property int oilTempNormIndex: Math.round((repeater.count) * (Hardware.oilTempValue / (Hardware.maxOilTempValue - Hardware.minOilTempValue)))
+                property int coolantTempNormIndex: Math.round((repeater.count) * (Hardware.coolantTempValue / (Hardware.maxCoolantTempValue - Hardware.minCoolantTempValue)))
 
                 Image {
                     property real relRealCenterIndex: index - (repeater.count + 1) / 2 + 1
@@ -64,8 +64,8 @@ Item {
                     height: sourceSize.height * scaleFactor
                     rotation: angle * 180 / Math.PI * 1.8 // 1.8 is magic number, without it the items aren't rotated enough. There must be an error in formulae
                     source: { // I tried to use ColorOverlay instead of textures of another color, but antialiasing didn't work for it
-                        var color = repeater.oilTempNormIndex >= 9 ? "red" : "green"
-                        return repeater.oilTempNormIndex > index ? "../resources/fuel_full_" + color + ".png" : "../resources/fuel_empty_" + color + ".png"
+                        var color = repeater.coolantTempNormIndex >= 9 ? "red" : "green"
+                        return repeater.coolantTempNormIndex > index ? "../resources/fuel_full_" + color + ".png" : "../resources/fuel_empty_" + color + ".png"
                     }
                     antialiasing: true
                 }

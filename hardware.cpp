@@ -5,21 +5,29 @@
 #include <QDebug>
 #include <QJSEngine>
 #include <QJSValue>
+#include <QThread>
 
-float ema(int newValue) {
-    static constexpr float alpha = 0.7;
-    static float lastEma = 0;
-    lastEma = (alpha * newValue) + (1.0 - alpha) * lastEma;
-    return lastEma;
-}
 
 Hardware::Hardware(const QString& xmlConfig, QObject *parent) : QObject(parent),
-    elmFound(false),
-    m_smoothingEnabled(true),
-    m_currBaudrate(0)
+    m_searching(false),
+    m_serialPort(nullptr),
+    m_isInitialized(false),
+    m_currBaudrate(0),
+    m_hardwareThread(new QThread(this))
 {
     m_xmlParser.process(xmlConfig);
     m_xmlParser.printAll();
+
+    // Do not move it to another thread, instead create it in another thread
+    connect(m_hardwareThread, &QThread::started, [=] {
+                m_serialPort = new QSerialPort(); // can not make a child of a parent from another thread
+            });
+    connect(m_hardwareThread, &QThread::finished, [=] {
+                m_serialPort->deleteLater();
+                m_serialPort = NULL;
+            });
+    m_hardwareThread->setObjectName("HardwareThread");
+    m_hardwareThread->start();
 
     // QTimer::singleShot(2000, [=] { processPacket("410D40"); });
     // QTimer::singleShot(3000, [=] { processPacket("410D50"); });
@@ -31,7 +39,9 @@ Hardware::Hardware(const QString& xmlConfig, QObject *parent) : QObject(parent),
     // timer->start(33);
 }
 
-Hardware::~Hardware() {}
+Hardware::~Hardware() {
+    m_hardwareThread = nullptr;
+}
 
 // Find current baudrate of adapter
 bool Hardware::findBaudrate() {
@@ -39,7 +49,7 @@ bool Hardware::findBaudrate() {
     // Try different baudrates to find correct one
     quint32 baud=0;
     for (auto b : tryBaudrates) {
-        serialPort.setBaudRate(b);
+        m_serialPort->setBaudRate(b);
         qDebug() << "Trying baudrate:" << b;
         // Send no-meaning command to check for answer
         QByteArray r = sendCmdSync("\x7F\x7F\r",1000);
@@ -53,18 +63,21 @@ bool Hardware::findBaudrate() {
         m_currBaudrate = baud;
         return true;
     }
-    qDebug() << "Can't find correct baudrate";
+    qWarning() << "Can't find correct baudrate";
     return false;
 }
 
 // Set maximal baudrate that is supported by adapter
 bool Hardware::setMaxBaudrate() {
+    qDebug() << Q_FUNC_INFO;
+
     const quint32 setBaudrates[]={2000000, 1000000, 500000, 230400, 115200};
+    // const quint32 setBaudrates[]={115200};
 
     if (m_currBaudrate == setBaudrates[0])
         return true;
 
-    qint32 savedBaudrate = serialPort.baudRate();
+    qint32 savedBaudrate = m_serialPort->baudRate();
     // Increase baudrate to maximum (try 2 000 000 bps first, then go down to 115 200)
     QByteArray idString = sendCmd("ATI");
     qDebug() << "Adapter ID:" << idString;
@@ -78,7 +91,7 @@ bool Hardware::setMaxBaudrate() {
     }
 
     for (auto s : setBaudrates) {
-        serialPort.setBaudRate(savedBaudrate);
+        m_serialPort->setBaudRate(savedBaudrate);
 
         qDebug() << "Trying to set baudrate:" << s;
         QByteArray r = sendCmd(QString("ATBRD%1").arg(qRound(4000000.0/s),2,16,QChar('0')),100);
@@ -90,16 +103,21 @@ bool Hardware::setMaxBaudrate() {
 
         r.clear();
         // Now switch serial baudrate to new one and wait for id String
-        serialPort.setBaudRate(s);
-        qDebug() << "Interface baudrate is" << serialPort.baudRate();
+        m_serialPort->setBaudRate(s);
+        qDebug() << "Interface baudrate is" << m_serialPort->baudRate();
 
-        while(serialPort.waitForReadyRead(100)) r.append(serialPort.readAll());
-        qDebug() << "Got second reply:" << r;
+        if (m_serialPort->waitForReadyRead(100)) {
+            r.append(m_serialPort->readAll());
+            qDebug() << "Got second reply:" << r;
+        }
+        else
+            qWarning() << "Did not get second reply";
 
         if (r.contains(idString)) {
             // We got correct reply, so lets confirm this baudrate by sending empty '\r' to scanner
             sendCmd("");
-            qDebug() << "New (maximum) baudrate is " << serialPort.baudRate();
+            qDebug() << "New (maximum) baudrate is " << m_serialPort->baudRate();
+            m_currBaudrate = s;
             return true;
         }
     }
@@ -108,97 +126,91 @@ bool Hardware::setMaxBaudrate() {
 
 
 // Open serial port
-bool Hardware::open(const QString& port) {
-    searching = false;
-    buffer.clear();
-    if (elmFound) serialPort.close();
+void Hardware::open(const QString& port) {
+    m_searching = false;
+
+    if (m_isInitialized) {
+        m_isInitialized = false; // not using setIsInitialized to not force splash screen again
+        QTimer::singleShot(0, m_serialPort, [=] { m_serialPort->close(); });
+    }
+
     qDebug() << "Opening serial port ..." << port;
-    serialPort.setPortName(port);
-    serialPort.setDataBits(QSerialPort::Data8);
-    serialPort.setParity(QSerialPort::NoParity);
-    serialPort.setStopBits(QSerialPort::OneStop);
-    serialPort.setFlowControl(QSerialPort::NoFlowControl);
-    // serialPort.setBaudRate(115200);
-    // serialPort.setBaudRate(2000000);
-    if (!serialPort.open(QIODevice::ReadWrite)) {
-        qDebug() << "Failed to open serial port!";
-        return false;
-    }
-    else qDebug() << "Serial port is opened";
 
-    // Find current baudrate of adapter
-    if (!findBaudrate()) return false;
+    QTimer::singleShot(0, m_serialPort, [=] {
+        Q_ASSERT(QThread::currentThread() == m_hardwareThread);
 
-    // Set maximal baudarate
-    if (!setMaxBaudrate()) return false;
+        m_buffer.clear();
 
-    qDebug() << "Initializing ELM327 ...";
-    elmFound = init();
-    if (!elmFound) {
-        serialPort.close();
-        qDebug() << "Failed to contact ELM327!";
-    }
-    else {
-        qDebug() << "ELM327 is detected";
-        connect(&serialPort, SIGNAL(readyRead()), SLOT(readData()));
-    }
+        m_serialPort->setPortName(port);
+        m_serialPort->setDataBits(QSerialPort::Data8);
+        m_serialPort->setParity(QSerialPort::NoParity);
+        m_serialPort->setStopBits(QSerialPort::OneStop);
+        m_serialPort->setFlowControl(QSerialPort::NoFlowControl);
+        m_serialPort->setBaudRate(115200);
+        if (!m_serialPort->open(QIODevice::ReadWrite)) {
+            qDebug() << "Failed to open serial port!";
+            emit initFinished();
+            return;
+        }
+        else qDebug() << "Serial port is opened";
 
-    return elmFound;
+        // Find current baudrate of adapter
+        if (!findBaudrate()) {
+            emit initFinished();
+            return;
+        }
+
+        // Set maximal baudarate
+        if (!setMaxBaudrate()) return;
+
+        qDebug() << "Initializing ELM327 ...";
+        init();
+
+        emit initFinished();
+    });
 }
 
 // Close serial port
 void Hardware::close() {
-    if (serialPort.isOpen()) {
-        disconnect(&serialPort);
-        serialPort.close();
-    }
-    elmFound = false;
+    QTimer::singleShot(0, m_serialPort, [=] {
+        if (m_serialPort->isOpen()) {
+            disconnect(m_serialPort);
+            m_serialPort->close();
+        }
+    });
+    m_isInitialized = false;
 }
 
 // Check that ELM327 is connected
 bool Hardware::init() {
-    if (!serialPort.isOpen()) return false;
+    if (!m_serialPort->isOpen()) return false;
 
-    QByteArray r;
+    const auto& cmdList = m_xmlParser.initCommands();
+    for (auto& c : cmdList) {
+        QByteArray r = sendCmd(c, 100);
+        qDebug() << ">" << r;
+        if (!r.contains("OK")) {
+            m_serialPort->close();
+            return false;
+        }
+    }
 
-    // Soft reset ELM327
-    //r = sendCmd("ATWS",1000);
-    //qDebug() << ">" << r;
-    //if (r.length()==0) return false;
+    qDebug() << "ELM327 is detected";
+    connect(m_serialPort, SIGNAL(readyRead()), SLOT(readData()), Qt::DirectConnection);
 
-    // Line feeds Off
-    r = sendCmd("ATL0",100);
-    qDebug() << ">" << r;
-    if (!r.contains("OK")) return false;
-
-    // Echo off
-    r = sendCmd("ATE0",100);
-    qDebug() << ">" << r;
-    if (!r.contains("OK")) return false;
-
-    // Headers On
-    //r = sendCmd("ATH1",100);
-    //qDebug() << ">" << r;
-    //if (!r.contains("OK")) return false;
-
-    // Allow long messages (>7 bytes)
-    r = sendCmd("ATAL",100);
-    qDebug() << ">" << r;
-    if (!r.contains("OK")) return false;
-
-    // Set protocol to Auto
-    r = sendCmd("ATSP0",100);
-    qDebug() << ">" << r;
-    if (!r.contains("OK")) return false;
+    setInitialized(true);
 
     return true;
 }
 
 bool Hardware::sendCmdAsync(const QByteArray &cmd) {
-    if (!elmFound) return false;
-    if (searching) return false;
-    QByteArray data = cmd;
-    serialPort.write(data.append(0x0D));
+    if (!m_isInitialized) return false;
+    if (m_searching) return false;
+
+    QTimer::singleShot(0, m_serialPort, [=] {
+                Q_ASSERT(QThread::currentThread() == m_hardwareThread);
+                m_serialPort->write(cmd + char(0x0D));
+            });
     return true;
 }
 
@@ -213,53 +225,71 @@ QByteArray Hardware::sendCmd(const QString& cmd, int timeout) {
 }
 
 QByteArray Hardware::sendCmdSync(const QByteArray &cmd, int timeout) {
+    Q_ASSERT(QThread::currentThread() == m_hardwareThread);
+
     QByteArray r;
-    if (serialPort.isOpen()) {
-        serialPort.blockSignals(true);
-        serialPort.write(cmd);
-        serialPort.flush();
-        while(serialPort.waitForReadyRead(timeout))
-            r.append(serialPort.readAll());
-        serialPort.blockSignals(false);
+    if (m_serialPort->isOpen()) {
+        m_serialPort->blockSignals(true);
+        m_serialPort->write(cmd);
+        m_serialPort->flush();
+        if (m_serialPort->waitForReadyRead(timeout))
+            r.append(m_serialPort->readAll());
+        m_serialPort->blockSignals(false);
     }
     return r;
 }
 
 void Hardware::readData() {
-    QByteArray data = serialPort.readAll();
-    buffer.append(data);
+    Q_ASSERT(QThread::currentThread() == m_hardwareThread);
 
-    //qDebug() << "Buffer: " << buffer.size() << " bytes";
+    processData(m_serialPort->readAll());
+}
 
-    while(buffer.contains(0x0D)) {
-        int i=buffer.indexOf(0x0D);
-        QByteArray d = buffer.left(i);
+void Hardware::processData(const QByteArray& data) {
+    if (!data.isEmpty())
+        m_buffer.append(data);
+
+    //qDebug() << "Buffer: " << m_buffer.size() << " bytes";
+
+    while(m_buffer.contains(0x0D)) {
+        int i=m_buffer.indexOf(0x0D);
+        QByteArray d = m_buffer.left(i);
         QByteArray str = d.replace("\r", "").replace("\n", "").replace(" ", "").replace(">", "").trimmed();
         if (str.length()) processPacket(str);
-        buffer=buffer.mid(i+1);
+        m_buffer=m_buffer.mid(i+1);
     }
+
 }
 
 void Hardware::processPacket(const QByteArray& str) {
 
+    Q_ASSERT(QThread::currentThread() == m_hardwareThread);
+
     qDebug() << "Raw data received:" << str;
 
     if (str.contains("SEARCHING")) {
-        searching = true;
+        m_searching = true;
         return;
     }
 
-    searching = false;
+    m_searching = false;
 
     if (!str.startsWith("41") || str.length() < 6) return;
 
     QByteArray pid = str.mid(2, 2).toLower();
-    qDebug() << "Pid:" << pid;
+    // qDebug() << "Pid:" << pid;
 
+    QJSEngine engine;
+
+    // ACCESSING parser which is in another thread, but since we are not messing with it, I think it is OK
     auto& cmdList = m_xmlParser.commands();
     for (auto& c : cmdList) {
 
-        if (pid == c->send) {
+        QString cmdPIDShort = c->send.toLower();
+        if (cmdPIDShort.startsWith("01") && cmdPIDShort.length() > 2)
+            cmdPIDShort.remove("01");
+
+        if (pid == cmdPIDShort) {
             QByteArray val = str.mid(4, c->replyLength * 2); // * 2 because 1 byte takes 2 characters
 
             if (!(c->conversion.isEmpty())) {
@@ -284,9 +314,8 @@ void Hardware::processPacket(const QByteArray& str) {
                 QString functionTemplate = "(function(%1) { return %2; })";
                 QString funcStr = functionTemplate.arg(convArgs.keys().join(",")).arg(c->conversion);
 
-                qDebug() << "funcStr:" << funcStr << ", args:" << convArgs.values();
+                // qDebug() << "funcStr:" << funcStr << ", args:" << convArgs.values();
 
-                QJSEngine engine;
                 QJSValue jsFunc = engine.evaluate(funcStr);
                 QJSValueList args;
                 for (auto v : convArgs.values())
@@ -294,9 +323,12 @@ void Hardware::processPacket(const QByteArray& str) {
 
                 QJSValue finalValue = jsFunc.call(args);
 
-                qDebug() << "Calculated result:" << finalValue.toVariant();
+                // qDebug() << "Calculated result:" << finalValue.toVariant();
 
-                emit dataReceived(c->name, finalValue);
+                // I don't pass QJSValue directly, because it seems to get destroyed at times
+                // before it reaches QML handler, so receiving undefined instead.
+                // That is mostlikely caused by passing QJSValue to QML from a different thread
+                emit dataReceived(c->name, finalValue.toVariant());
             }
             else {
                 qDebug() << "Conversion is empty for:" << pid;
@@ -307,72 +339,31 @@ void Hardware::processPacket(const QByteArray& str) {
         // else
         //     qDebug() << "Cmd send:" << c->send << "not equal to:" << pid;
     }
-
-    // if (pid == "0D")  { // Speed
-    //     bool ok = false;
-    //     value = QString(str.mid(4, 2)).toInt(&ok, 16);
-    //     Q_ASSERT(ok);
-    //     //qDebug() << "Speed value received:" << value;
-    //     setSpeed(value);
-    // }
-    // else if (pid == "0C")  { // RPM
-    //     bool ok = false;
-    //     value = QString(str.mid(4, 4)).toInt(&ok, 16);
-    //     Q_ASSERT(ok);
-    //     qDebug() << "RPM value received:" << value;
-    //     setRpm(value / 1000.0 / 4);
-    // }
-    // else if (pid == "46")  { // air temperature in C
-    //     bool ok = false;
-    //     value = QString(str.mid(4, 4)).toInt(&ok, 16);
-    //     Q_ASSERT(ok);
-    //     qDebug() << "Air temp value received:" << value;
-    //     m_airTemp = value - 40;
-    //     emit airTempChanged();
-    // }
-    // else if (pid == "05")  { // coolant temperature in C
-    //     bool ok = false;
-    //     value = QString(str.mid(4, 4)).toInt(&ok, 16);
-    //     Q_ASSERT(ok);
-    //     qDebug() << "Coolant temp value received:" << value;
-    //     m_coolantTemp = value - 40;
-    //     emit coolantTempChanged();
-    // }
-    // else if (pid == "2F")  { // fuel level in %
-    //     bool ok = false;
-    //     value = QString(str.mid(4, 4)).toInt(&ok, 16);
-    //     Q_ASSERT(ok);
-    //     qDebug() << "Fuel level received:" << value;
-    //     m_fuelLevel = 100*value / 255;
-    //     emit fuelLevelChanged();
-    // }
-    // else
-    //     return;
 }
 
-void Hardware::setSpeed(int value) {
-    if (m_smoothingEnabled) {
-        m_speed = ema(value);
-        emit speedChanged();
-    }
-    else {
-        if (m_speed == value) return;
-        m_speed = value;
-        emit speedChanged();
-    }
-}
-
-void Hardware::setRpm(qreal value) {
-    if (m_rpm == value) return;
-    m_rpm = value;
-    emit rpmChanged();
-}
-
-void Hardware::setSmoothingEnabled(bool value) {
-    m_smoothingEnabled = value;
-}
 
 const XmlParser& Hardware::parser() const
 {
     return m_xmlParser;
+}
+
+void Hardware::setInitialized(bool value)
+{
+    qDebug() << Q_FUNC_INFO << value;
+
+    if (m_isInitialized == value)
+        return;
+
+    m_isInitialized = value;
+    emit isInitializedChanged();
+}
+
+bool Hardware::isInitialized() const
+{
+    return m_isInitialized;
+}
+
+const QObject* Hardware::workerThreadObject() const
+{
+    return m_serialPort;
 }

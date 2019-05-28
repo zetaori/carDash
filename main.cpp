@@ -23,6 +23,12 @@ int main(int argc, char *argv[]) {
     app.setOverrideCursor(QCursor(Qt::BlankCursor));
 
     Hardware hw(argv[1]);
+
+    // Load QML first with splashscreen while we are loading
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty("HardwareClass", &hw);
+    engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
+
     QString port;
     QSettings sett("ChalkElec","CarDash");
     QList<QSerialPortInfo> portList = QSerialPortInfo::availablePorts();
@@ -52,19 +58,21 @@ int main(int argc, char *argv[]) {
         qFatal("OBD2 scanner is not detected!");
     }
 
+    QObject::connect(&hw, &Hardware::initFinished, [&] {
+                if (hw.isInitialized())
+                    sett.setValue("port",port);
+                else
+                    qFatal("Can't open serial port of OBD2 scanner!");
+            });
+
     // Open serial port of OBD2
-    if (!hw.open(port)) qFatal("Can't open serial port of OBD2 scanner!");
-    else sett.setValue("port",port);
+    hw.open(port);
 
-    // hw.sendCmd("010C", 5000); // rpm
+    // Run cycle to send commands to controller in the proper thread
+    QTimer::singleShot(0, const_cast<QObject*>(hw.workerThreadObject()), [&] {
 
-    qDebug() << "Sleeping 5 secs after initialization...";
-
-    QThread::sleep(5);
-
-    QTimer timer;
-    QObject::connect(&timer, &QTimer::timeout, [&] {
-#if 0 // Sending comands from config - uncomment when needed
+            Q_ASSERT(QThread::currentThread()->objectName() == "HardwareThread");
+// #if 0 // Sending comands from config - uncomment when needed
                 auto& cmdList = hw.parser().commands();
                 for (auto c : cmdList) {
                     // If skipCount is 0 (by default) we will process the command each time
@@ -72,24 +80,20 @@ int main(int argc, char *argv[]) {
                         c->curCount = 0;
 
                         qDebug() << "Sending command:" << c->send;
-                        hw.sendCmdAsync(c->send);
+                        QByteArray reply = hw.sendCmdSync(c->send, 100);
+                        hw.processData(reply);
                     }
                     // else
                     //     qDebug() << "Skipping count for" << c->name;
                 }
-#endif // Sensing commands from config
+// #endif // Sensing commands from config
 
                 // hw.sendCmdAsync("010D"); // speed
-                hw.sendCmdAsync("010C"); // rpm
-                //hw.sendCmdAsync("0146"); // air temp
-                //hw.sendCmdAsync("0105"); // coolant temp
+                // hw.sendCmdSync("010C"); // rpm
+                // hw.sendCmdAsync("012F"); // fuel level
+                // hw.sendCmdAsync("0146"); // outside air temp
+                // hw.sendCmdAsync("0105"); // coolant temp
             });
-
-    timer.start(200); // 30 FPS
-
-    QQmlApplicationEngine engine;
-    engine.rootContext()->setContextProperty("HardwareClass", &hw);
-    engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
 
     return app.exec();
 }

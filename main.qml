@@ -25,7 +25,8 @@ ApplicationWindow {
         spacing: root.height / 15
 
         Speedometer {
-            id: speedtometer
+            id: speedometer
+
             width: row.widgetSize
             height: width
 
@@ -73,6 +74,26 @@ ApplicationWindow {
         Tachometer {
             width: row.widgetSize
             height: width
+        }
+    }
+
+    Rectangle {
+        id: splashScreenBackground
+
+        anchors.fill: parent
+        color: "#151922"
+
+        visible: !HardwareClass.isInitialized
+
+        AnimatedImage {
+            id: splashScreenLogo
+
+            anchors.centerIn: parent
+            height: parent.height / 2
+            source: "resources/proton-animated.gif"
+            fillMode: Image.PreserveAspectFit
+            Component.onCompleted: console.log("Image loaded")
+            onStatusChanged: if (status === Image.Ready) console.log("Logo loaded")
         }
     }
 }

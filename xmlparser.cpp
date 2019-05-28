@@ -94,3 +94,8 @@ const QList<Command*>& XmlParser::commands() const
 {
     return m_commands;
 }
+
+const QList<QString>& XmlParser::initCommands() const
+{
+    return init;
+}
