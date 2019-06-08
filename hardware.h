@@ -20,7 +20,7 @@ public:
     ~Hardware();
 
     QByteArray sendCmdSync(const QByteArray& cmd, int timeout=200);
-    bool sendCmdAsync(const QByteArray& cmd);
+    bool sendCmdAsync(const QByteArray& cmd, int timeout = 1000);
 
     void processData(const QByteArray& data);
 

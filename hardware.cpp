@@ -219,7 +219,7 @@ bool Hardware::init() {
     return true;
 }
 
-bool Hardware::sendCmdAsync(const QByteArray &cmd) {
+bool Hardware::sendCmdAsync(const QByteArray &cmd, int timeout) {
     if (!m_isInitialized) return false;
     if (m_searching) return false;
 
@@ -231,7 +231,7 @@ bool Hardware::sendCmdAsync(const QByteArray &cmd) {
     QTimer::singleShot(0, m_serialPort, [=] {
                 Q_ASSERT(QThread::currentThread() == m_hardwareThread);
                 m_serialPort->write(cmd + char(0x0D));
-                m_lastCmdTimerId->start(1000);
+                m_lastCmdTimerId->start(timeout);
             });
 
     return true;
