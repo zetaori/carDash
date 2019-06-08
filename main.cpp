@@ -58,42 +58,84 @@ int main(int argc, char *argv[]) {
         qFatal("OBD2 scanner is not detected!");
     }
 
-    QObject::connect(&hw, &Hardware::initFinished, [&] {
-                if (hw.isInitialized())
-                    sett.setValue("port",port);
+    auto& cmdList = hw.parser().commands();
+    int curCmdIdx = 0;
+
+    QObject::connect(&hw, &Hardware::initFinished, &hw, [&] {
+                if (hw.isInitialized()) {
+                    sett.setValue("port", port);
+
+                    QObject::connect(&hw, &Hardware::commandFinished, [&] (const QByteArray& cmd) {
+                                Q_UNUSED(cmd);
+
+                                qDebug() << "Cmd finished" << cmd << curCmdIdx << cmdList.size();
+
+                                while (true) {
+                                    if (curCmdIdx < cmdList.size()) { // In case list is empty
+                                        Command* c = cmdList[curCmdIdx];
+
+                                        qDebug() << "Cmd:" << c->send << c->curCount << "of" << c->skipCount;
+
+                                        if (++curCmdIdx >= cmdList.size())
+                                            curCmdIdx = 0;
+                                        // If skipCount is 0 (by default) we will process the command each time
+                                        if (++(c->curCount) >= c->skipCount) {
+                                            c->curCount = 0;
+
+                                            hw.sendCmdAsync(c->send);
+                                            break;
+                                        }
+                                    }
+                                    else
+                                        break;
+                                }
+                            });
+
+                    if (curCmdIdx < cmdList.size()) {
+                        Command* c = cmdList[curCmdIdx];
+
+                        // Just send the first commands without any counter to proceed normally
+                        hw.sendCmdAsync(c->send);
+                    }
+
+                    // Run cycle to send commands to controller in the proper thread
+                    // QTimer::singleShot(0, const_cast<QObject*>(hw.workerThreadObject()), [&] {
+
+                                // Q_ASSERT(QThread::currentThread()->objectName() == "HardwareThread");
+                // #if 0 // Sending comands from config - uncomment when needed
+                                // while (true) {
+                                    // auto& cmdList = hw.parser().commands();
+                                    // for (auto c : cmdList) {
+                                    //     // If skipCount is 0 (by default) we will process the command each time
+                                    //     if (++(c->curCount) >= c->skipCount) {
+                                    //         c->curCount = 0;
+                                    //
+                                    //         qDebug() << "Sending command:" << c->send;
+                                    //         QByteArray reply = hw.sendCmdSync(c->send, 1000);
+                                    //         hw.processData(reply);
+                                    //     }
+                                    //     // else
+                                    //     //     qDebug() << "Skipping count for" << c->name;
+                                    // }
+
+                                    // hw.sendCmdSync(QByteArray("010C") + char(0x0D), 1000); // rpm
+                                // }
+                // #endif // Sensing commands from config
+
+                                // hw.sendCmdAsync("010D"); // speed
+                                // hw.sendCmdSync("010C"); // rpm
+                                // hw.sendCmdAsync("012F"); // fuel level
+                                // hw.sendCmdAsync("0146"); // outside air temp
+                                // hw.sendCmdAsync("0105"); // coolant temp
+                            // });
+
+                }
                 else
                     qFatal("Can't open serial port of OBD2 scanner!");
             });
 
     // Open serial port of OBD2
     hw.open(port);
-
-    // Run cycle to send commands to controller in the proper thread
-    QTimer::singleShot(0, const_cast<QObject*>(hw.workerThreadObject()), [&] {
-
-            Q_ASSERT(QThread::currentThread()->objectName() == "HardwareThread");
-// #if 0 // Sending comands from config - uncomment when needed
-                auto& cmdList = hw.parser().commands();
-                for (auto c : cmdList) {
-                    // If skipCount is 0 (by default) we will process the command each time
-                    if (++(c->curCount) >= c->skipCount) {
-                        c->curCount = 0;
-
-                        qDebug() << "Sending command:" << c->send;
-                        QByteArray reply = hw.sendCmdSync(c->send, 100);
-                        hw.processData(reply);
-                    }
-                    // else
-                    //     qDebug() << "Skipping count for" << c->name;
-                }
-// #endif // Sensing commands from config
-
-                // hw.sendCmdAsync("010D"); // speed
-                // hw.sendCmdSync("010C"); // rpm
-                // hw.sendCmdAsync("012F"); // fuel level
-                // hw.sendCmdAsync("0146"); // outside air temp
-                // hw.sendCmdAsync("0105"); // coolant temp
-            });
 
     return app.exec();
 }

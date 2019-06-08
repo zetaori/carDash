@@ -6,6 +6,7 @@
 #include <QJSValue>
 
 class QThread;
+class QTimer;
 
 #include "xmlparser.h"
 
@@ -42,6 +43,7 @@ signals:
     void initFinished();
 
     void dataReceived(const QString& targetId, QVariant value);
+    void commandFinished(const QByteArray& cmd);
 
 private:
     bool init();
@@ -57,6 +59,8 @@ private:
     volatile bool m_searching;
     QSerialPort* m_serialPort; // Lives in another thread! Be careful to read and write in proper thread
     QByteArray m_buffer; // Be careful to read and write in serial port thread
+    QByteArray m_lastAsyncCommand;
+    QTimer* m_lastCmdTimerId;
 
     bool m_isInitialized;
     XmlParser m_xmlParser;

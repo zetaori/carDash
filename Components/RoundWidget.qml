@@ -9,6 +9,23 @@ Image {
     property real value: 0
     property real maxValue: 0
 
+    property bool valueSmoothing: false
+
+    property real smoothedValue: {
+        if (valueSmoothing)
+            return ema(value)
+        else
+            return value
+    }
+
+    property real lastSmoothedValue: 0
+
+    function ema(newValue) {
+        var alpha = 0.7;
+        lastSmoothedValue = (alpha * newValue) + (1.0 - alpha) * lastSmoothedValue;
+        return lastSmoothedValue;
+    }
+
     // Background of arrow trace, which limits outer edge of trace by clipping it via OpacityMask
     Rectangle {
         id: gradientMask
@@ -83,7 +100,7 @@ Image {
         property real radius: parent.width / 6.8 // Magic number which is radius from speedometer center to image bottom point
         readonly property real startAngle: Math.PI / 4.02 // to match 0 on scale
         readonly property real endAngle: Math.PI * 1.75 // to match 240 on scale
-        property real valueAngle: (root.value / root.maxValue) * (endAngle - startAngle)
+        property real valueAngle: (root.smoothedValue / root.maxValue) * (endAngle - startAngle)
         property real valueAbsAngle: startAngle + valueAngle
         property real limitedAngle: valueAbsAngle < startAngle ? startAngle : (valueAbsAngle > endAngle ? endAngle : valueAbsAngle)
 

@@ -6,11 +6,13 @@
 #include <QJSEngine>
 #include <QJSValue>
 #include <QThread>
+#include <QTimer>
 
 
 Hardware::Hardware(const QString& xmlConfig, QObject *parent) : QObject(parent),
     m_searching(false),
     m_serialPort(nullptr),
+    m_lastCmdTimerId(nullptr),
     m_isInitialized(false),
     m_currBaudrate(0),
     m_hardwareThread(new QThread(this))
@@ -21,9 +23,20 @@ Hardware::Hardware(const QString& xmlConfig, QObject *parent) : QObject(parent),
     // Do not move it to another thread, instead create it in another thread
     connect(m_hardwareThread, &QThread::started, [=] {
                 m_serialPort = new QSerialPort(); // can not make a child of a parent from another thread
+                m_lastCmdTimerId = new QTimer();
+                connect(m_lastCmdTimerId, &QTimer::timeout, [=] {
+                    Q_ASSERT(!m_lastAsyncCommand.isEmpty());
+                    auto cmd = m_lastAsyncCommand;
+                    m_lastAsyncCommand.clear();
+                    qDebug() << "Cleared last async cmd on timer";
+                    m_lastCmdTimerId->stop();
+                    emit commandFinished(cmd);
+                });
             });
     connect(m_hardwareThread, &QThread::finished, [=] {
                 m_serialPort->deleteLater();
+                m_lastCmdTimerId->stop();
+                m_lastCmdTimerId->deleteLater();
                 m_serialPort = NULL;
             });
     m_hardwareThread->setObjectName("HardwareThread");
@@ -52,7 +65,8 @@ bool Hardware::findBaudrate() {
         m_serialPort->setBaudRate(b);
         qDebug() << "Trying baudrate:" << b;
         // Send no-meaning command to check for answer
-        QByteArray r = sendCmdSync("\x7F\x7F\r",1000);
+        QByteArray r = sendCmdSync("\x7F\x7F\r",2000);
+        qDebug() << "Response:" << r;
         if (r.endsWith('>')) {
             baud=b;
             break;
@@ -94,7 +108,7 @@ bool Hardware::setMaxBaudrate() {
         m_serialPort->setBaudRate(savedBaudrate);
 
         qDebug() << "Trying to set baudrate:" << s;
-        QByteArray r = sendCmd(QString("ATBRD%1").arg(qRound(4000000.0/s),2,16,QChar('0')),100);
+        QByteArray r = sendCmd(QString("ATBRD%1").arg(qRound(4000000.0/s),2,16,QChar('0')),1000);
         if (!r.contains("OK")) {
             qDebug() << "Didn't get OK";
             continue;
@@ -106,12 +120,13 @@ bool Hardware::setMaxBaudrate() {
         m_serialPort->setBaudRate(s);
         qDebug() << "Interface baudrate is" << m_serialPort->baudRate();
 
-        if (m_serialPort->waitForReadyRead(100)) {
+        // if (m_serialPort->waitForReadyRead(100)) {
+        while (m_serialPort->waitForReadyRead(1000)) {
             r.append(m_serialPort->readAll());
             qDebug() << "Got second reply:" << r;
         }
-        else
-            qWarning() << "Did not get second reply";
+        // else
+        //     qWarning() << "Did not get second reply";
 
         if (r.contains(idString)) {
             // We got correct reply, so lets confirm this baudrate by sending empty '\r' to scanner
@@ -161,7 +176,8 @@ void Hardware::open(const QString& port) {
         }
 
         // Set maximal baudarate
-        if (!setMaxBaudrate()) return;
+        if (!setMaxBaudrate())
+            qWarning() << "Failed to send max baud rate, will proceed with current one";
 
         qDebug() << "Initializing ELM327 ...";
         init();
@@ -187,7 +203,7 @@ bool Hardware::init() {
 
     const auto& cmdList = m_xmlParser.initCommands();
     for (auto& c : cmdList) {
-        QByteArray r = sendCmd(c, 100);
+        QByteArray r = sendCmd(c, 300);
         qDebug() << ">" << r;
         if (!r.contains("OK")) {
             m_serialPort->close();
@@ -207,12 +223,20 @@ bool Hardware::sendCmdAsync(const QByteArray &cmd) {
     if (!m_isInitialized) return false;
     if (m_searching) return false;
 
+    qDebug() << Q_FUNC_INFO << cmd;
+
+    m_lastAsyncCommand = cmd.right(2).toLower();
+    qDebug() << "Set last async cmd to" << m_lastAsyncCommand;
+
     QTimer::singleShot(0, m_serialPort, [=] {
                 Q_ASSERT(QThread::currentThread() == m_hardwareThread);
                 m_serialPort->write(cmd + char(0x0D));
+                m_lastCmdTimerId->start(1000);
             });
+
     return true;
 }
+
 
 // Send AT command to ELM327
 QByteArray Hardware::sendCmd(const QString& cmd, int timeout) {
@@ -227,15 +251,35 @@ QByteArray Hardware::sendCmd(const QString& cmd, int timeout) {
 QByteArray Hardware::sendCmdSync(const QByteArray &cmd, int timeout) {
     Q_ASSERT(QThread::currentThread() == m_hardwareThread);
 
+    qDebug() << Q_FUNC_INFO << cmd;
+
     QByteArray r;
     if (m_serialPort->isOpen()) {
         m_serialPort->blockSignals(true);
         m_serialPort->write(cmd);
         m_serialPort->flush();
-        if (m_serialPort->waitForReadyRead(timeout))
+        // if (m_serialPort->waitForReadyRead(timeout))
+        // int currTimeout = 0;
+        // while (currTimeout <= timeout) {
+        //         currTimeout += 100;
+        //     if (m_serialPort->waitForReadyRead(100)) {
+        //         qDebug() << "Curr timeout:" << currTimeout << timeout;
+        //         if (m_serialPort->bytesAvailable() > 0)
+        //             r.append(m_serialPort->readAll());
+        //     }
+        // }
+
+        qDebug() << "Before blocking for read";
+
+        while (m_serialPort->waitForReadyRead(timeout))
             r.append(m_serialPort->readAll());
+
+        qDebug() << "After blocking for read";
+
         m_serialPort->blockSignals(false);
     }
+    else
+        qWarning() << "Serial port is closed!";
     return r;
 }
 
@@ -249,7 +293,7 @@ void Hardware::processData(const QByteArray& data) {
     if (!data.isEmpty())
         m_buffer.append(data);
 
-    //qDebug() << "Buffer: " << m_buffer.size() << " bytes";
+    qDebug() << "Buffer:" << data << ", size:" << m_buffer.size() << " bytes";
 
     while(m_buffer.contains(0x0D)) {
         int i=m_buffer.indexOf(0x0D);
@@ -274,7 +318,10 @@ void Hardware::processPacket(const QByteArray& str) {
 
     m_searching = false;
 
-    if (!str.startsWith("41") || str.length() < 6) return;
+    if (!str.startsWith("41") || str.length() < 6) {
+        qWarning() << "Received data is too short:" << str;
+        return;
+    }
 
     QByteArray pid = str.mid(2, 2).toLower();
     // qDebug() << "Pid:" << pid;
@@ -334,6 +381,17 @@ void Hardware::processPacket(const QByteArray& str) {
                 qDebug() << "Conversion is empty for:" << pid;
                 emit dataReceived(c->name, val.toInt(NULL, 16));
             }
+
+            if (pid == m_lastAsyncCommand) {
+                m_lastAsyncCommand.clear();
+                qDebug() << "Cleared last async cmd";
+                Q_ASSERT(m_lastCmdTimerId->isActive());
+                m_lastCmdTimerId->stop();
+                emit commandFinished(pid);
+            }
+            else
+                qDebug() << "Pid" << pid << " != last cmd" << m_lastAsyncCommand;
+
             break;
         }
         // else

@@ -14,6 +14,10 @@ Item {
         scaleSource: "../resources/rpm_scale.png"
         value: Hardware.rpm / 1000.0
         maxValue: Hardware.maxRpm / 1000.0
+        valueSmoothing: false
+
+        onValueChanged: console.log(value)
+        // onSmoothedValueChanged: console.log(smoothedValue)
 
         Column {
             anchors.centerIn: parent
